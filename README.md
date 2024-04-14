@@ -5,7 +5,7 @@
 Term: Spring 2024
 
 + Team 12
-+ Projec title: Lorem ipsum dolor sit amet
++ Projec title: Machine Learning Fairness
 + Team members
 	+ Tianyi Xia
 	+ Peng Jiang
@@ -28,9 +28,12 @@ Term: Spring 2024
 + Methodology Differences:
     - Feature Selection: The first article suggests a pre-processing step focusing on feature selection to enhance fairness, which could be a strategic starting point for your project. This involves analyzing and choosing features that are less likely to introduce bias into the model.
     - Conditional Discrimination: The second article's methodologies are more focused on adjusting the model or data to address conditional biases, making it crucial for developing algorithms that are sensitive to the nuances of discrimination.
-- Implementation Strategy: Your project teams can implement these methodologies by first applying fairness-aware feature selection to ensure the initial set of features is less biased. Subsequently, applying techniques to handle conditional discrimination can further refine the model, addressing biases that are conditional on certain attributes.
-- Evaluation and Comparison: For the evaluation phase, it is essential to compare the performance and fairness of algorithms before and after applying the described techniques. This involves using metrics for fairness alongside traditional performance metrics to assess the impact of each approach on the algorithm's fairness and efficiency.
 
++ Local Massaging
+    - Objective: Adjust labels within each age category to mitigate bias and balance the probability of recidivism between males and females.
+
++ Preferential Sampling
+    - Objective: Modify the dataset composition by deleting and duplicating instances to create a more balanced dataset that does not reinforce existing biases.
 	
 **Contribution statement**: [default] All team members contributed equally in all stages of this project. All team members approve our work presented in this GitHub repository including this contributions statement. 
 
