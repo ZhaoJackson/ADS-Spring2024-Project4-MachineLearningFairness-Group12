@@ -1,0 +1,168 @@
+---
+title: "Fairness-aware"
+author: "Tianyi Xia, Danielle Solomon"
+date: "2024-04-08"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r packages, warning=FALSE}
+library(caTools)
+library(neuralnet)
+library(DALEX)
+library(ggplot2)
+library(keras)
+library(tensorflow)
+library(VGAM)
+library(tidyr)
+library(iml)
+library(dplyr)
+library(randomForest)
+library(xgboost)
+library(shapr)
+```
+
+
+```{r read doc}
+da=read.csv('../data/compas-scores-two-years.csv',header=T)
+da <- da[ grepl("Caucasian|African-American", da$race),]
+da <- da[,c("id",'sex','age','c_charge_degree','priors_count',"race",'end',"two_year_recid")]
+names(da)[names(da) == "c_charge_degree"] <- "charge_degree"
+names(da)[names(da) == "end"] <- "length_of_stay"
+Y <- da$two_year_recid
+da$sex <- ifelse(da$sex == "Male", 1, 0)
+da$charge_degree <- ifelse(da$charge_degree == "M", 1, 0)
+da$race <- ifelse(da$race == "Caucasian",0, 1)
+
+set.seed(07)
+split <- sample.split(Y, SplitRatio = 0.8)
+
+train <- da[split, ]   
+test <- da[!split, ]
+x_train <- as.matrix(da[split,c('sex','age','charge_degree','priors_count',"race",'length_of_stay')])  # Features
+y_train <- da[split,]$two_year_recid
+A_train <- da[split,]$race  # Binary sensitive feature
+x_test <- as.matrix(da[!split,c('sex','age','charge_degree','priors_count',"race",'length_of_stay')])  # Features
+y_test <- da[!split,]$two_year_recid
+A_test <- da[!split,]$race
+# 查看结果
+cat("Training set dimensions:", dim(x_train), "\n")
+cat("Test set dimensions:", dim(x_test), "\n")
+```
+```{r}
+calibration <- function(sensitive_var, y_pred, y_true) {
+  protected_points <- which(sensitive_var == 1)
+  y_pred_protected <- y_pred[protected_points]
+  y_true_protected <- y_true[protected_points]
+  p_protected <- sum(y_pred_protected == y_true_protected) / length(y_true_protected)
+  
+  not_protected_points <- which(sensitive_var == 0)
+  y_pred_not_protected <- y_pred[not_protected_points]
+  y_true_not_protected <- y_true[not_protected_points]
+  p_not_protected <- sum(y_pred_not_protected == y_true_not_protected) / length(y_true_not_protected)
+  
+  calibration_value <- abs(p_protected - p_not_protected)
+  
+  return(calibration_value)
+}
+accuracy_race <- function(sensitive_var, y_pred, y_true) {
+  # Find indices of the protected group
+  protected_points <- which(sensitive_var == 1)
+  y_pred_protected <- y_pred[protected_points]
+  y_true_protected <- y_true[protected_points]
+  # Calculate accuracy for the protected group
+  p_protected <- sum(y_pred_protected == y_true_protected) / length(y_true_protected)
+  
+  # Find indices of the not protected group
+  not_protected_points <- which(sensitive_var == 0)
+  y_pred_not_protected <- y_pred[not_protected_points]
+  y_true_not_protected <- y_true[not_protected_points]
+  # Calculate accuracy for the not protected group
+  p_not_protected <- sum(y_pred_not_protected == y_true_not_protected) / length(y_true_not_protected)
+  
+  # Return both accuracies as a list
+  return(list(protected = p_protected, not_protected = p_not_protected))
+}
+```
+
+
+```{r}
+# Convert 'two_year_recid' to a factor if it's not already
+da$two_year_recid <- as.factor(da$two_year_recid)
+
+# Train the Random Forest model as a classifier
+model <- randomForest(two_year_recid ~ sex + age + charge_degree + priors_count + race + length_of_stay, 
+                      data = da, 
+                      ntree = 100)
+y_pred <- predict(model, x_test)
+accuracy <- mean(y_pred == y_test)
+print(paste("Accuracy:", accuracy))
+print(accuracy_race(x_test[,'race'],y_pred,y_test))
+print(paste("Calibration:", calibration(x_test[,'race'],y_pred,y_test)))
+results_rf <- data.frame(
+  `Random Forest` = c(accuracy, accuracy_race(x_test[,'race'],y_pred,y_test)$protected, accuracy_race(x_test[,'race'],y_pred,y_test)$not_protected, calibration(x_test[,'race'],y_pred,y_test)),
+  row.names = c("Model Accuracy", "Protected", "Not Protected", "Calibration")
+)
+```
+
+
+```{r}
+model <- xgboost(data = x_train, label = y_train, nround = 20, verbose = FALSE)
+
+explainer <- shapr(x_train, model)
+p <- mean(y_train)
+explanation <- explain( x_test,
+                        approach = "empirical",
+                        explainer = explainer,
+                        prediction_zero = p)
+
+print(explanation$dt)
+explanation$dt <- explanation$dt %>%
+  rename(model = none) %>%  
+  select(-race)
+#plot(explanation)
+
+```
+
+```{r}
+sharply_mean=colMeans(explanation$dt)
+y_pred <- predict(model, x_test)
+y_labels <- ifelse(y_pred >= 0.5, 1, 0)
+accuracy <- mean(y_labels == y_test)
+         
+
+data_long <- pivot_longer(explanation$dt, cols = everything(), names_to = "Feature", values_to = "ShapleyValue")
+data_long$Feature <- factor(data_long$Feature, levels = c("model", setdiff(data_long$Feature, "model")))
+ggplot(data_long, aes(x = Feature, y = ShapleyValue)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplot of Shapley Values for Each Feature", x = "Feature", y = "Shapley Value")
+print(paste("Accuracy:", accuracy))
+print(accuracy_race(x_test[,'race'],y_labels,y_test))
+print(paste("Calibration:", calibration(x_test[,'race'],y_labels,y_test)))
+results_xg <- data.frame(
+  `XGBoost` = c(accuracy, accuracy_race(x_test[,'race'],y_labels,y_test)$protected, accuracy_race(x_test[,'race'],y_labels,y_test)$not_protected, calibration(x_test[,'race'],y_labels,y_test)),
+  row.names = c("Model Accuracy", "Protected", "Not Protected", "Calibration")
+)
+print(sharply_mean)
+```
+
+```{r}
+result_df <- cbind(results_rf, results_xg)
+print(result_df)
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
